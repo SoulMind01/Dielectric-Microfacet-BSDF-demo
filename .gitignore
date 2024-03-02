@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+
+# Mine
+build
+opencv-4.x
+*.xmake
+*.vscode
