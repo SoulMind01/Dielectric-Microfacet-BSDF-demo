@@ -1,0 +1,1 @@
+xmake && xmake run -w .

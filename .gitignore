@@ -36,3 +36,4 @@ build
 opencv-4.x
 *.xmake
 *.vscode
+*.png

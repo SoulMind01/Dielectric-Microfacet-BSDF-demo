@@ -69,7 +69,7 @@ std::tuple<Vec3f, Vec3f, float> sample_area_light(Vec2f samples)
     return std::make_tuple(p, n, L_BRDF);
 }
 
-Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo)
+Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo, int depth = 0)
 {
     // =============================================================================================
     // TODO: Implement this function
@@ -93,7 +93,6 @@ Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo)
         Return L_dir + L_indir
     */
 
-    bool flag = std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]);
     // Contribution from the light source
     Vec3f L_dir{0.0f};
     // Uniformly sample the light at x
@@ -109,13 +108,17 @@ Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo)
     if (!hit)
     {
         Vec3f f_r;
-        if (flag)
+        if (std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Lambertian>(BoxScene::materials[tri.material_id]).eval();
         }
-        else
+        else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Microfacet>(BoxScene::materials[tri.material_id]).eval(wo, wi, tri.face_normal);
+        }
+        else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+        {
+            f_r = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).eval(wo, wi, tri.face_normal);
         }
         float cosine = dot(wi, tri.face_normal);
         if (cosine < 0.0f)
@@ -138,15 +141,20 @@ Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo)
 
     Vec3f wj;
     float pdf_brdf;
-    if (flag)
+    if (std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]))
     {
         auto lambertian = std::get<Lambertian>(BoxScene::materials[tri.material_id]);
         std::tie(wj, pdf_brdf) = lambertian.sample(tri.face_normal, UniformSampler::next2d());
     }
-    else
+    else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
     {
         auto microfacet = std::get<Microfacet>(BoxScene::materials[tri.material_id]);
         std::tie(wj, pdf_brdf) = microfacet.sample(wo, tri.face_normal, UniformSampler::next2d());
+    }
+    else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+    {
+        auto dielectric = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]);
+        std::tie(wj, pdf_brdf) = dielectric.sample(wo, tri.face_normal, UniformSampler::next2d());
     }
     // Trace the new ray
     auto [hit2, t_min2, nearest_tri2] =
@@ -155,23 +163,29 @@ Vec3f shade_with_light_sampling(Triangle tri, Vec3f p, Vec3f wo)
     if (hit2 && !is_emitter(nearest_tri2))
     {
         Vec3f q = p + t_min2 * wj;
-        // Vec3f f_r =
-        //     (std::get<Lambertian>(BoxScene::materials[tri.material_id])).eval();
         Vec3f f_r;
-        if (flag)
+        if (std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Lambertian>(BoxScene::materials[tri.material_id]).eval();
         }
-        else
+        else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Microfacet>(BoxScene::materials[tri.material_id]).eval(wo, wj, tri.face_normal);
+        }
+        else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+        {
+            f_r = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).eval(wo, wj, tri.face_normal);
         }
         float cosine = dot(wj, tri.face_normal);
         if (cosine < 0.0f)
             cosine = 0.0f;
-        L_indir = shade_with_light_sampling(nearest_tri2, q, -wj) * f_r * cosine /
-                  pdf_brdf / p_rr;
+
+        L_indir = shade_with_light_sampling(nearest_tri2, q, -wj, depth + 1) * cosine * f_r / pdf_brdf / p_rr;
     }
+    // if (!depth)
+    // {
+    //     return L_dir;
+    // }
     return L_dir + L_indir;
     // =============================================================================================
 }
@@ -216,15 +230,25 @@ Vec3f shade_with_MIS(Triangle tri, Vec3f p, Vec3f wo)
 {
     Vec3f L_dir{0.0f};
     Vec3f L_dir_light{0.0f};
-    
+
     // Uniformly sample the light at x
     auto [x, light_normal, L_light] = sample_area_light(UniformSampler::next2d());
     // Shoot a ray from p to x
     Vec3f ray_dir = normalize(x - p);
 
-    float pdf_brdf = std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id])
-                         ? std::get<Lambertian>(BoxScene::materials[tri.material_id]).pdf(wo, ray_dir, tri.face_normal)
-                         : std::get<Microfacet>(BoxScene::materials[tri.material_id]).pdf(wo, ray_dir, tri.face_normal);
+    float pdf_brdf = 0.0f;
+    if (std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]))
+    {
+        pdf_brdf = std::get<Lambertian>(BoxScene::materials[tri.material_id]).pdf(wo, ray_dir, tri.face_normal);
+    }
+    else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
+    {
+        pdf_brdf = std::get<Microfacet>(BoxScene::materials[tri.material_id]).pdf(wo, ray_dir, tri.face_normal);
+    }
+    else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+    {
+        pdf_brdf = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).pdf(wo, ray_dir, tri.face_normal);
+    }
 
     float dis_p_x = distance(p, x);
     float pdf_light = L_light / dot(light_normal, -ray_dir) * dis_p_x * dis_p_x;
@@ -233,14 +257,18 @@ Vec3f shade_with_MIS(Triangle tri, Vec3f p, Vec3f wo)
 
     if (!is_hit_L)
     {
-        Vec3f f_r;        
+        Vec3f f_r;
         if (std::holds_alternative<Lambertian>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Lambertian>(BoxScene::materials[tri.material_id]).eval();
         }
-        if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
+        else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Microfacet>(BoxScene::materials[tri.material_id]).eval(wo, ray_dir, tri.face_normal);
+        }
+        else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+        {
+            f_r = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).eval(wo, ray_dir, tri.face_normal);
         }
         L_dir_light = eval_area_light(-ray_dir) * f_r *
                       std::abs(dot(tri.face_normal, ray_dir)) / pdf_light;
@@ -258,9 +286,13 @@ Vec3f shade_with_MIS(Triangle tri, Vec3f p, Vec3f wo)
     {
         std::tie(wi, pdf) = std::get<Lambertian>(BoxScene::materials[tri.material_id]).sample(tri.face_normal, UniformSampler::next2d());
     }
-    else
+    else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
     {
         std::tie(wi, pdf) = std::get<Microfacet>(BoxScene::materials[tri.material_id]).sample(wo, tri.face_normal, UniformSampler::next2d());
+    }
+    else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+    {
+        std::tie(wi, pdf) = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).sample(wo, tri.face_normal, UniformSampler::next2d());
     }
     float pdf_light_prime = 0.0f;
     auto [is_hit, t, hit_tri] = RayTracer::closest_hit(p, wi, octree, BoxScene::triangles);
@@ -274,9 +306,13 @@ Vec3f shade_with_MIS(Triangle tri, Vec3f p, Vec3f wo)
         {
             f_r = std::get<Lambertian>(BoxScene::materials[tri.material_id]).eval();
         }
-        else
+        else if (std::holds_alternative<Microfacet>(BoxScene::materials[tri.material_id]))
         {
             f_r = std::get<Microfacet>(BoxScene::materials[tri.material_id]).eval(wo, wi, tri.face_normal);
+        }
+        else if (std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[tri.material_id]))
+        {
+            f_r = std::get<Dielectric_BSDF>(BoxScene::materials[tri.material_id]).eval(wo, wi, tri.face_normal);
         }
         if (is_emitter(hit_tri))
         {
@@ -316,13 +352,7 @@ Vec3f path_tracing_with_MIS(Vec3f ray_pos, Vec3f ray_dir)
 
 int main(int argc, char **argv)
 {
-    const unsigned int max_spps[] = {4, 32, 128, 256};
-
-    spdlog::info("\n"
-                 "----------------------------------------------\n"
-                 "Welcome to CS 190I Assignment 4: Microfacet Materials\n"
-                 "----------------------------------------------");
-    const unsigned int max_spp = 1; // original: 32
+    const unsigned int max_spps[] = {4};
     const unsigned int image_width = 512;
     const unsigned int image_height = 512;
     // Some prepereations
@@ -342,18 +372,23 @@ int main(int argc, char **argv)
     // =============================================================================================
     // Change the material ID after you have implemented the Microfacet BRDF
     // Diffuse
-    const int bunny_material_id = 6;
-    // Iron
-    // const int bunny_material_id = 5;
-    // Gold
-    // const int bunny_material_id = 6;
+    const int bunny_material_id = 7;
+    // Iron: 5, Gold: 6, Glass: 7
 
     // Load the scene
     // If program can't find the bunny.obj file, use xmake run -w . or move the bunny.obj file to the
     // same directory as the executable file.
 
-    const std::string obj_path = "./bunny.obj";
+    const std::string obj_path = "./sphere.obj";
+    const Vec3f bias = Vec3f{0.275f, -0.35f, 0.25f};
+    const float scale = 0.2f;
     std::vector<Triangle> obj_triangles = load_obj(obj_path, bunny_material_id);
+    for (auto &i : obj_triangles)
+    {
+        i.v0 = i.v0 * scale + bias;
+        i.v1 = i.v1 * scale + bias;
+        i.v2 = i.v2 * scale + bias;
+    }
     BoxScene::triangles.insert(BoxScene::triangles.end(),
                                std::make_move_iterator(obj_triangles.begin()),
                                std::make_move_iterator(obj_triangles.end()));
@@ -364,35 +399,30 @@ int main(int argc, char **argv)
         // =============================================================================================
         // Path Tracing with light sampling
         spdlog::info("Path Tracing with light sampling: rendering started!");
-        // for (int y = 0; y < image.height; y++)
-        // {
-        //     if (y % 50 == 0)
-        //     {
-        //         spdlog::info("Rendering row {} / {} \r", y, image.height);
-        //     }
-        //     for (int x = 0; x < image.width; x++)
-        //     {
-        //         image(x, y) = Vec3f{0.0f};
-        //         for (int sample = 0; sample < max_spp; sample++)
-        //         {
-        //             const float u = (x + UniformSampler::next1d()) / image.width;
-        //             const float v = (y + UniformSampler::next1d()) / image.height;
-        //             Vec3f ray_direction = camera.generate_ray(u, (1.0f - v));
-        //             image(x, y) += clamp(path_tracing_with_light_sampling(
-        //                                      camera.position, ray_direction),
-        //                                  Vec3f(0.0f), Vec3f(50.0f));
-        //         }
-        //         image(x, y) /= (float)max_spp;
-        //     }
-        // }
-        // // printf("%3f", MY/count);
-        // spdlog::info("Path Tracing with light sampling: Rendering finished!");
-        // // iron
-        // if (bunny_material_id == 5)
-        //     image.save_with_tonemapping("./path_tracing_with_light_sampling_iron_" + std::to_string(max_spp) + "spp.png");
-        // // gold
-        // else
-        //     image.save_with_tonemapping("./path_tracing_with_light_sampling_gold_" + std::to_string(max_spp) + "spp.png");
+        for (int y = 0; y < image.height; y++)
+        {
+            if (y % 50 == 0)
+            {
+                spdlog::info("Rendering row {} / {} \r", y, image.height);
+            }
+            for (int x = 0; x < image.width; x++)
+            {
+                image(x, y) = Vec3f{0.0f};
+                for (int sample = 0; sample < max_spp; sample++)
+                {
+                    const float u = (x + UniformSampler::next1d()) / image.width;
+                    const float v = (y + UniformSampler::next1d()) / image.height;
+                    Vec3f ray_direction = camera.generate_ray(u, (1.0f - v));
+                    image(x, y) += clamp(path_tracing_with_light_sampling(
+                                             camera.position, ray_direction),
+                                         Vec3f(0.0f), Vec3f(50.0f));
+                }
+                image(x, y) /= (float)max_spp;
+            }
+        }
+        // printf("%3f", MY/count);
+        spdlog::info("Path Tracing with light sampling: Rendering finished!");
+        image.save_with_tonemapping("./path_tracing_with_light_sampling.png");
 
         // =============================================================================================
         // Path Tracing with MIS
@@ -419,14 +449,7 @@ int main(int argc, char **argv)
             }
         }
         spdlog::info("Path Tracing with MIS: Rendering finished!");
-        // iron
-        if (bunny_material_id == 5)
-            image.save_with_tonemapping("./path_tracing_with_MIS_iron_" + std::to_string(max_spp) + "spp.png");
-        // gold
-        else
-            image.save_with_tonemapping("./path_tracing_with_MIS_gold_" + std::to_string(max_spp) + "spp.png");
+        image.save_with_tonemapping("./path_tracing_with_MIS.png");
     }
-
-    // =============================================================================================
     return 0;
 }
