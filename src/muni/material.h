@@ -210,9 +210,8 @@ namespace muni
     const float roughness;
     const float n1;
     const float n2;
-    float F(Vec3f wi, Vec3f h) const
+    float F(Vec3f wi) const
     {
-      // pbr
       float cos_theta = acos(wi.z);
       bool entering = cos_theta > 0.0f;
       float eta_i = n1, eta_t = n2;
@@ -226,57 +225,50 @@ namespace muni
       float R_parl = (eta_t * cos_theta - eta_i * cos_theta_t) / (eta_t * cos_theta + eta_i * cos_theta_t);
       float R_perp = (eta_i * cos_theta - eta_t * cos_theta_t) / (eta_i * cos_theta + eta_t * cos_theta_t);
       return 0.5f * (R_parl * R_parl + R_perp * R_perp);
-      // float c = std::abs(dot(wi, h));
-      // float eta_i = n1, eta_t = n2;
-      // if (dot(wi, h) < 0.0f)
-      // {
-      //   std::swap(eta_i, eta_t);
-      // }
-      // float g = eta_t * eta_t / (eta_i * eta_i) - 1.0f + c * c;
-      // if (g < 0.0f)
-      // {
-      //   return 1.0f;
-      // }
-      // g = sqrt(g);
-      // float res = 0.5f * ((g - c) / (g + c)) * ((g - c) / (g + c)) * (1.0f + ((c * (g + c) - 1.0f) / (c * (g - c) + 1.0f)) * ((c * (g + c) - 1.0f) / (c * (g - c) + 1.0f)));
-      // return res;
     }
     float D(Vec3f h) const
     {
-      float x = h.z > 0.0f ? 1.0f : 0.0f;
       float theta_h = acos(h.z);
-      float res = x * exp(-tan(theta_h) * tan(theta_h) / (roughness * roughness)) / (M_PI * roughness * roughness * pow(cos(theta_h), 4.0f));
+      float tan_theta_h = tan(theta_h);
+      float cos_theta = cos(theta_h);
+      float res = exp(-tan_theta_h * tan_theta_h / (roughness * roughness)) / (M_PI * roughness * roughness * pow(cos_theta, 4.0f));
       return res;
     }
-    float G1(Vec3f w, Vec3f h) const
+    float lambda(Vec3f w) const
     {
-      float x = dot(w, h) / w.z > 0.0f ? 1.0f : 0.0f;
-      float theta_h = acos(h.z);
-      float a = 1.0f / (roughness * tan(theta_h));
-      if (a < 1.6f)
+      float absTanTheta = std::abs(tan(acos(w.z)));
+      if (std::isinf(absTanTheta))
       {
-        return x * (3.535f * a + 2.181f * a * a) / (1.0f + 2.276f * a + 2.577f * a * a);
+        return 0.0f;
       }
-      return x;
+      // Compute alpha for direction w
+      float a = 1.0f / (roughness * absTanTheta);
+      if (a >= 1.6f)
+      {
+        return 0.0f;
+      }
+      return (1.0f - 1.259f * a + 0.396f * a * a) / (3.535f * a + 2.181f * a * a);
     }
-    float G(Vec3f wo, Vec3f wi, Vec3f h) const
+    float G1(Vec3f w) const
     {
-      return G1(wo, h) * G1(wi, h);
+      return 1.0f / (1.0f + lambda(w));
+    }
+    float G(Vec3f wo, Vec3f wi) const
+    {
+      return G1(wo) * G1(wi);
     }
     Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const
     {
       Vec3f wo = to_local(wo_world, normal);
       Vec3f wi = to_local(wi_world, normal);
-      Vec3f hr = normalize(wo + wi);
-      float eta_i = n1, eta_o = n2;
-      if (dot(wo, normal) < 0.0f)
-      {
-        std::swap(eta_i, eta_o);
-      }
-      Vec3f ht = -normalize(eta_i * wo + eta_o * wi);
-      float fr = F(wo, hr) * G(wo, wi, hr) * D(hr) / (4.0f * std::abs(dot(wi, normal)) * std::abs(dot(wo, normal)));
-      float ft = std::abs(dot(wo, ht) * dot(wi, ht) / dot(wo, normal) / dot(wi, normal)) * eta_o * eta_o * (1.0f - F(wi, ht)) * G(wo, wi, ht) * D(ht) / (float)pow(eta_i * dot(wo, ht) + eta_o * dot(wi, ht), 2.0f);
-      return (fr + ft) * Vec3f{1.0f, 1.0f, 1.0f};
+      Vec3f wh = normalize(wo + wi);
+      float F = this->F(wi);
+      float D = this->D(wh);
+      float G = this->G(wo, wi);
+      float cos_theta_o = std::abs(wo.z);
+      float cos_theta_i = std::abs(wi.z);
+      float fr = F * D * G / (4.0f * cos_theta_o * cos_theta_i);
+      return fr * Vec3f{1.0f, 1.0f, 1.0f};
     }
     float pdf(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const
     {
@@ -292,7 +284,7 @@ namespace muni
       {
         // Reflect
         Vec3f h = normalize(wo + wi);
-        float weight = std::abs(dot(wo, h) * G(wo, wi, h) / dot(wo, normal) / dot(h, normal));
+        float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
         float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
                                  : 100;
         return p_wi;
@@ -306,7 +298,7 @@ namespace muni
           std::swap(eta_i, eta_o);
         }
         Vec3f h = -normalize(eta_i * wi + eta_o * wo);
-        float weight = std::abs(dot(wo, h) * G(wo, wi, h) / dot(wo, normal) / dot(h, normal));
+        float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
         float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
                                  : 100;
         return p_wi;
@@ -344,53 +336,12 @@ namespace muni
 
     std::tuple<Vec3f, float> sample(Vec3f wo_world, Vec3f normal, Vec2f u) const
     {
-      // // Debug: return a random direction on a sphere
-      // float u1 = u.x, u2 = u.y;
-      // float theta = acos(1 - 2 * u1);
-      // float phi = 2 * M_PI * u2;
-      // Vec3f wi = Vec3f{sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta)};
-      // wi = from_local(wi, normal);
-      // return std::make_tuple(wi, 1.0f / (2 * M_PI));
-
-      // Vec3f wo = to_local(wo_world, normal);
-      // float theta_h = atan(sqrt(-roughness * roughness * log(1.0f - u.x)));
-      // float phi_h = 2.0f * M_PI * u.y;
-      // Vec3f h = Vec3f{sin(theta_h) * cos(phi_h), sin(theta_h) * sin(phi_h), cos(theta_h)};
-      // // Evaluate the Fresnel term to determine reflection or refraction
-      // float Fresnel = F(wo, h);
-      // float eta_i = n1, eta_o = n2;
-      // if (dot(wo, normal) < 0.0f)
-      // {
-      //   std::swap(eta_i, eta_o);
-      // }
-      // float c = dot(wo, h);
-      // float temp = 1.0f + eta_i / eta_o * (c * c - 1.0f);
-      // if (UniformSampler::next1d() < Fresnel || temp < 0)
-      // {
-      //   // Reflect
-      //   Vec3f wi = mirror_reflect(-wo, h);
-      //   float weight = std::abs(dot(wo, h) * G(wo, wi, h) / dot(wo, normal) / dot(h, normal));
-      //   Vec3f wi_world = from_local(wi, normal);
-      //   float p_wi = eval(wo_world, wi_world, normal).x / weight;
-      //   return {wi_world, p_wi};
-      // }
-      // else
-      // {
-      //   // Refract
-      //   float sign = dot(wo, normal) < 0.0f ? 1.0f : -1.0f;
-      //   Vec3f wi = h * (eta_i / eta_o * c - sign * (float)sqrt(temp)) - eta_i / eta_o * wo;
-      //   float weight = std::abs(dot(wo, h) * G(wo, wi, h) / dot(wo, normal) / dot(h, normal));
-      //   Vec3f wi_world = from_local(wi, normal);
-      //   float p_wi = eval(wo_world, wi_world, normal).x / weight;
-      //   return {wi_world, p_wi};
-      // }
       Vec3f wo = to_local(wo_world, normal);
-      float Fresnel = F(wo, Vec3f{0.0f, 0.0f, 1.0f});
+      float Fresnel = F(wo);
       if (UniformSampler::next1d() < Fresnel)
       {
         // Reflect
         Vec3f wi = Vec3f{-wo.x, -wo.y, wo.z};
-
         float p_wi = Fresnel;
         return {from_local(wi, normal), p_wi};
       }
