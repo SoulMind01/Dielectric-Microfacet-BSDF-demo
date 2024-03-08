@@ -257,7 +257,7 @@ namespace muni
     {
       return G1(wo) * G1(wi);
     }
-    Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const
+    Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal, bool debug = 0) const
     {
       Vec3f wo = to_local(wo_world, normal);
       Vec3f wi = to_local(wi_world, normal);
@@ -268,41 +268,49 @@ namespace muni
       float cos_theta_o = std::abs(wo.z);
       float cos_theta_i = std::abs(wi.z);
       float fr = F * D * G / (4.0f * cos_theta_o * cos_theta_i);
-      return fr * Vec3f{1.0f, 1.0f, 1.0f};
+      bool entering = wo.z > 0.0f;
+      float eta_i = entering ? n1 : n2;
+      float eta_t = entering ? n2 : n1;
+      float ft = eta_t * eta_t * (1.0f - F) * D * G / pow(eta_i * dot(wo, wh) + eta_t * dot(wi, wh), 2.0f);
+      // Debug
+      if (debug)
+        ft = 0.5f;
+      return (fr + ft) * Vec3f{1.0f, 1.0f, 1.0f};
     }
     float pdf(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const
     {
-      Vec3f wo = to_local(wo_world, normal);
-      Vec3f wi = to_local(wi_world, normal);
-      float eta_i = n1, eta_o = n2;
-      if (dot(wo, normal) < 0.0f)
-      {
-        std::swap(eta_i, eta_o);
-      }
-      // return 1.0f / 2.0f / M_PI;
-      if (dot(wo, normal) * dot(wi, normal) > 0.0f)
-      {
-        // Reflect
-        Vec3f h = normalize(wo + wi);
-        float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
-        float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
-                                 : 100;
-        return p_wi;
-      }
-      else
-      {
-        // Refract
-        float eta_i = n1, eta_o = n2;
-        if (dot(wo, normal) < 0.0f)
-        {
-          std::swap(eta_i, eta_o);
-        }
-        Vec3f h = -normalize(eta_i * wi + eta_o * wo);
-        float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
-        float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
-                                 : 100;
-        return p_wi;
-      }
+      // Debug: sample a uniform whole sphere
+      return 1.0f / (4.0f * M_PI);
+      // Vec3f wo = to_local(wo_world, normal);
+      // Vec3f wi = to_local(wi_world, normal);
+      // float eta_i = n1, eta_o = n2;
+      // if (dot(wo, normal) < 0.0f)
+      // {
+      //   std::swap(eta_i, eta_o);
+      // }
+      // if (dot(wo, normal) * dot(wi, normal) > 0.0f)
+      // {
+      //   // Reflect
+      //   Vec3f h = normalize(wo + wi);
+      //   float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
+      //   float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
+      //                            : 100;
+      //   return p_wi;
+      // }
+      // else
+      // {
+      //   // Refract
+      //   float eta_i = n1, eta_o = n2;
+      //   if (dot(wo, normal) < 0.0f)
+      //   {
+      //     std::swap(eta_i, eta_o);
+      //   }
+      //   Vec3f h = -normalize(eta_i * wi + eta_o * wo);
+      //   float weight = std::abs(dot(wo, h) * G(wo, wi) / dot(wo, normal) / dot(h, normal));
+      //   float p_wi = weight != 0 ? eval(wo_world, wi_world, normal).x / weight
+      //                            : 100;
+      //   return p_wi;
+      // }
     }
 
     /**
@@ -336,29 +344,36 @@ namespace muni
 
     std::tuple<Vec3f, float> sample(Vec3f wo_world, Vec3f normal, Vec2f u) const
     {
-      Vec3f wo = to_local(wo_world, normal);
-      float Fresnel = F(wo);
-      if (UniformSampler::next1d() < Fresnel)
-      {
-        // Reflect
-        Vec3f wi = Vec3f{-wo.x, -wo.y, wo.z};
-        float p_wi = Fresnel;
-        return {from_local(wi, normal), p_wi};
-      }
-      else
-      {
-        // Refract
-        bool entering = wo.z > 0.0f;
-        float eta_i = entering ? n1 : n2;
-        float eta_t = entering ? n2 : n1;
-        Vec3f wi;
-        if (!Refract(wo, Faceforward(Vec3f{0.0f, 0.0f, 1.0f}, wo), eta_i / eta_t, wi))
-        {
-          return {wi, 0.01f};
-        }
-        float p_wi = 1.0f - Fresnel;
-        return {from_local(wi, normal), p_wi};
-      }
+      // Debug: sample a uniform whole sphere
+      float u1 = u.x, u2 = u.y;
+      float phi = 2 * M_PI * u1;
+      float theta = acos(1 - 2 * u2);
+      Vec3f wi = Vec3f{sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta)};
+      wi = from_local(wi, normal);
+      return std::make_tuple(wi, 1.0f / (2 * M_PI));
+      // Vec3f wo = to_local(wo_world, normal);
+      // float Fresnel = F(wo);
+      // if (UniformSampler::next1d() < Fresnel)
+      // {
+      //   // Reflect
+      //   Vec3f wi = Vec3f{-wo.x, -wo.y, wo.z};
+      //   float p_wi = Fresnel;
+      //   return {from_local(wi, normal), p_wi};
+      // }
+      // else
+      // {
+      //   // Refract
+      //   bool entering = wo.z > 0.0f;
+      //   float eta_i = entering ? n1 : n2;
+      //   float eta_t = entering ? n2 : n1;
+      //   Vec3f wi;
+      //   if (!Refract(wo, Faceforward(Vec3f{0.0f, 0.0f, 1.0f}, wo), eta_i / eta_t, wi))
+      //   {
+      //     return {wi, 0.01f};
+      //   }
+      //   float p_wi = 1.0f - Fresnel;
+      //   return {from_local(wi, normal), p_wi};
+      // }
     }
   };
 }; // namespace muni
