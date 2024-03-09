@@ -22,7 +22,7 @@ namespace muni
         const Microfacet Gold{.roughness = 0.0005f, .n1 = 1.0f, .n2 = 0.42f};
         const Microfacet Iron{.roughness = 0.02f, .n1 = 1.0f, .n2 = 0.295f};
         // Dielectric Microfacet materials
-        const Dielectric_BSDF Glass{.roughness = 0.7f, .n1 = 1.0f, .n2 = 1.5f};
+        const Dielectric_BSDF Glass{.roughness = 0.5f, .n1 = 1.0f, .n2 = 1.5f};
         static const std::array<std::variant<Lambertian, Microfacet, Dielectric_BSDF>, 8> materials = {
             // Back
             Lambertian{.albedo = Vec3f{0.0f, 0.874000013f, 0.0f}},

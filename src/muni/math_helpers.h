@@ -92,4 +92,11 @@ namespace muni
         float k = 1 - eta * eta * (1 - cosi * cosi);
         return k < 0 ? Vec3f(0, 0, 0) : eta * incident_dir + (eta * cosi - (float)std::sqrt(k)) * n;
     }
+
+    Vec3f cross_product(const Vec3f &a, const Vec3f &b)
+    {
+        return Vec3f(a.y * b.z - a.z * b.y,
+                     a.z * b.x - a.x * b.z,
+                     a.x * b.y - a.y * b.x);
+    }
 } // namespace muni
