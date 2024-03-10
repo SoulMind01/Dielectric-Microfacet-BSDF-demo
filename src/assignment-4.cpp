@@ -184,11 +184,13 @@ Vec3f path_tracing(Vec3f ray_pos, Vec3f ray_dir, bool debug = false)
 }
 void test_bsdf_sample(Camera);
 void test_compute_half_vector();
+void test_geometry();
+void test_sphere(Camera);
 int main(int argc, char **argv)
 {
-    const unsigned int max_spps[] = {4};
-    const unsigned int image_width = 512;
-    const unsigned int image_height = 512;
+    const unsigned int max_spps[] = {32};
+    const unsigned int image_width = 256;
+    const unsigned int image_height = 256;
     // Some prepereations
     Image image{.width = image_width,
                 .height = image_height,
@@ -233,6 +235,8 @@ int main(int argc, char **argv)
     {
         test_compute_half_vector();
         test_bsdf_sample(camera);
+        test_geometry();
+        test_sphere(camera);
         // Shoot a ray to the center of the image and print the hit triangle position
         // const float u = 0.5f;
         // const float v = 0.5f;
@@ -310,7 +314,7 @@ int main(int argc, char **argv)
                     for (int sample = 0; sample < max_spp; sample++)
                     {
                         bool debug = false;
-                        if (x >= 240 && x <= 270 && y >= 240 && y <= 270)
+                        if (x >= 160 && x <= 192 && y >= 128 && y <= 160)
                         {
                             debug = true;
                         }
@@ -324,6 +328,7 @@ int main(int argc, char **argv)
                     image(x, y) /= (float)max_spp;
                 }
             }
+            image(180, 144) = Vec3f(10000.0f, 0.0f, 0.0f);
             spdlog::info("Path Tracing with light sampling: Rendering finished!");
             image.save_with_tonemapping("./path_tracing" + std::to_string(max_spp) + ".png");
             return 0;
@@ -450,7 +455,7 @@ void test_compute_half_vector()
     // Test case: wo at right, wi at left
     wo = grazing;
     wi = -grazing;
-    half_vector = BoxScene::Glass.computeHalfVector(wo, wi);
+    half_vector = BoxScene::Glass.computeHalfVector(wo, wi, true);
     if (half_vector != Vec3f{0, 0, 1})
     {
         printf("half_vector: %f, %f, %f\n", half_vector.x, half_vector.y, half_vector.z);
@@ -475,4 +480,68 @@ void test_compute_half_vector()
     half_vector = BoxScene::Glass.computeHalfVector(wo, wi);
     printf("half_vector: %f, %f, %f\n", half_vector.x, half_vector.y, half_vector.z);
     spdlog::info("Refraction test passed!");
+}
+
+void test_geometry()
+
+{
+    spdlog::info("\nStart testing the geometry function!");
+    Dielectric_BSDF glass = BoxScene::Glass;
+    Vec3f w = Vec3f{0, 0, 1};
+    Vec3f x = Vec3f{1, 0, 0};
+    int n = 8;
+    // for (int i = 0; i <= n; i++)
+    // {
+    //     Vec3f wx = normalize(x * i + w * (n - i));
+    //     printf("wx: %f, %f, %f\n", wx.x, wx.y, wx.z);
+    //     printf("F(wx): %f\n", glass.F(wx));
+    //     printf("D(wx): %f\n", glass.D(wx));
+    // }
+}
+void test_sphere(Camera camera)
+{
+    // Shoot a ray to (180, 144) and test its eval function
+    spdlog::info("\nStart testing the eval function of the Dielectric_BSDF class!");
+    int x = 180, y = 144;
+    const float u = (x + UniformSampler::next1d()) / 256;
+    const float v = (y + UniformSampler::next1d()) / 256;
+    Vec3f ray_direction = camera.generate_ray(u, (1.0f - v));
+    const auto [is_ray_hit, t_min, nearest_tri] =
+        RayTracer::closest_hit(camera.position, ray_direction, octree, BoxScene::triangles);
+    if (!(is_ray_hit && std::holds_alternative<Dielectric_BSDF>(BoxScene::materials[nearest_tri.material_id])))
+    {
+        throw std::runtime_error("The hit triangle is not a dielectric!");
+    }
+    const Vec3f hit_position = camera.position + t_min * ray_direction;
+    const Vec3f wo = -ray_direction;
+    Dielectric_BSDF glass = std::get<Dielectric_BSDF>(BoxScene::materials[nearest_tri.material_id]);
+    // Sample the wi
+    auto [wi, pdf] = glass.sample(wo, nearest_tri.face_normal, UniformSampler::next2d());
+    printf("wo_world: %f, %f, %f\n", wo.x, wo.y, wo.z);
+    printf("wi_world: %f, %f, %f\n", wi.x, wi.y, wi.z);
+    printf("pdf: %f\n", pdf);
+
+    // Print the wo and wi in the local space
+    Vec3f wo_local = to_local(wo, nearest_tri.face_normal);
+    Vec3f wi_local = to_local(wi, nearest_tri.face_normal);
+    printf("wo_local: %f, %f, %f\n", wo_local.x, wo_local.y, wo_local.z);
+    printf("wi_local: %f, %f, %f\n", wi_local.x, wi_local.y, wi_local.z);
+
+    // Print the half vector in the local space
+    Vec3f half_vector = glass.computeHalfVector(wo_local, wi_local, true);
+    printf("half_vector(local): %f, %f, %f\n", half_vector.x, half_vector.y, half_vector.z);
+
+    // Print the half vector in the world space
+    Vec3f half_vector_world = from_local(half_vector, nearest_tri.face_normal);
+    printf("half_vector(world): %f, %f, %f\n", half_vector_world.x, half_vector_world.y, half_vector_world.z);
+
+    // Print the D value for the local half vector
+    printf("D(half vector): %f\n", glass.D(half_vector));
+
+    // Print tri normal
+    printf("tri_normal: %f, %f, %f\n", nearest_tri.face_normal.x, nearest_tri.face_normal.y, nearest_tri.face_normal.z);
+
+    // Evaluate the f_r
+    Vec3f f_r = glass.eval(wo, wi, nearest_tri.face_normal, true);
+    printf("f_s: %f, %f, %f\n", f_r.x, f_r.y, f_r.z);
 }

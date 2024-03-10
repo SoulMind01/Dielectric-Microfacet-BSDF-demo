@@ -239,6 +239,26 @@ namespace muni
     const float roughness;
     const float n1;
     const float n2;
+    bool check_vec_invalid(const Vec3f &v, std::string name) const
+    {
+      if (std::abs(v.x) > 1.01f || std::abs(v.y) > 1.01f || std::abs(v.z) > 1.01f)
+      {
+        printf("%s is invalid(abs > 1): %f %f %f\n", name.c_str(), v.x, v.y, v.z);
+        return true;
+      }
+      if ((float)length_squared(v) > 1.01f)
+      {
+        printf("length_squared: %f\n", length_squared(v));
+        printf("%s is invalid(length > 1): %f %f %f\n", name.c_str(), v.x, v.y, v.z);
+        return true;
+      }
+      if (std::isnan(v.x) || std::isnan(v.y) || std::isnan(v.z))
+      {
+        printf("%s is NaN: %f %f %f\n", name.c_str(), v.x, v.y, v.z);
+        return true;
+      }
+      return false;
+    }
     float F(Vec3f wi, bool debug = false) const
     {
       float cos_theta = std::abs(wi.z);
@@ -278,10 +298,11 @@ namespace muni
     }
     float D(Vec3f h, bool debug = false) const
     {
-      float theta_h = acos(std::abs(h.z));
+      float theta_h = acos(h.z);
       float tan_theta_h = tan(theta_h);
       float cos_theta = cos(theta_h);
-      float res = exp(-tan_theta_h * tan_theta_h / (roughness * roughness)) / (M_PI * roughness * roughness * pow(cos_theta, 4.0f));
+      float cos_theta_4 = cos_theta * cos_theta * cos_theta * cos_theta;
+      float res = exp(-tan_theta_h * tan_theta_h / (roughness * roughness)) / (M_PI * roughness * roughness * cos_theta_4);
       // Debug
       // See if res is a wierd number
       if (debug)
@@ -300,9 +321,16 @@ namespace muni
       }
       return res;
     }
-    float lambda(Vec3f w) const
+    float lambda(Vec3f w, bool debug) const
     {
       float absTanTheta = std::abs(tan(acos(w.z)));
+      if (debug)
+      {
+        check(absTanTheta, "absTanTheta");
+        printf("w.z: %f\n", w.z);
+        printf("acos(w.z): %f\n", acos(w.z));
+        printf("absTanTheta: %f\n", absTanTheta);
+      }
       if (std::isinf(absTanTheta))
       {
         return 0.0f;
@@ -315,23 +343,52 @@ namespace muni
       }
       return (1.0f - 1.259f * a + 0.396f * a * a) / (3.535f * a + 2.181f * a * a);
     }
-    float G1(Vec3f w) const
+    float G1(Vec3f w, bool debug) const
     {
-      return 1.0f / (1.0f + lambda(w));
+      return 1.0f / (1.0f + lambda(w, debug));
     }
-    float G(Vec3f wo, Vec3f wi) const
+    float G(Vec3f wo, Vec3f wi, bool debug = false) const
     {
-      return G1(wo) * G1(wi);
+      return G1(wo, debug) * G1(wi, debug);
     }
-    Vec3f computeHalfVector(const Vec3f &wo, const Vec3f &wi, bool debug = false) const
+    bool is_valid_refraction(Vec3f wo, Vec3f wi, Vec3f wh, float etai, float etao) const
     {
+      if (dot(wo, wh) * dot(wi, wh) > 0.0f)
+      {
+        printf("wo, wi are in the same hemisphere\n");
+        return false;
+      }
+      float cos_theta_o = dot(wo, wh);
+      float cos_theta_i = dot(wi, wh);
+      float sin_theta_o = sqrt(std::max(0.0f, 1.0f - cos_theta_o * cos_theta_o));
+      float sin_theta_i = sqrt(std::max(0.0f, 1.0f - cos_theta_i * cos_theta_i));
+      float diff = etai * sin_theta_o - etao * sin_theta_i;
+      if (diff > 0.01f)
+      {
+        printf("diff: %f\n", diff);
+        printf("does not satisfy Snell's law\n");
+        return false;
+      }
+      return true;
+    }
+    Vec3f computeHalfVector(Vec3f wo, Vec3f wi, bool debug = false) const
+    {
+      if (debug)
+      {
+        printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
+        printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
+      }
+      Vec3f wh;
       if (wi.z * wo.z >= 0.0f)
       {
+        if (debug)
+          printf("compute a half vector for a reflected ray\n");
         // Reflected
-        Vec3f wh = wo + wi;
+         wh = wo + wi;
         if (wh.x != 0 || wh.y != 0 || wh.z != 0)
         {
-          return normalize(wh);
+          if (debug) printf("wh is not 0\n");
+          wh = normalize(wh);
         }
         else
         {
@@ -339,120 +396,197 @@ namespace muni
           float phi_i = atan2(wi.y, wi.x);
           float theta_o = acos(wo.z);
           float theta_i = acos(wi.z);
-          if (theta_i + theta_o == 0)
+          if (theta_i + theta_o - M_PI < 0.001f)
           {
-            return Vec3f{0.0f, 0.0f, 1.0f};
+            if (debug) printf("wo, wi are parallel\n");
+            wh = Vec3f{0.0f, 0.0f, 1.0f};
+            return wh;
           }
-          float phi_h = (phi_o + phi_i) / 2.0f;
-          float theta_h = theta_o + theta_i == 0 ? 0.5f * M_PI : (theta_o + theta_i) / 2.0f;
-          if (theta_h == 0.5f * M_PI)
+          else
           {
-            return Vec3f{0.0f, 0.0f, 1.0f};
+            float phi_h = (phi_o + phi_i) / 2.0f;
+            float theta_h = theta_o + theta_i == 0 ? 0.5f * M_PI : (theta_o + theta_i) / 2.0f;
+            if (theta_h == 0.5f * M_PI)
+            {
+              wh = Vec3f{0.0f, 0.0f, 1.0f};
+            }
+            else
+            {
+              wh = Vec3f{sin(theta_h) * cos(phi_h), sin(theta_h) * sin(phi_h), cos(theta_h)};
+              wh = normalize(wh);
+            }
           }
-          wh = Vec3f{sin(theta_h) * cos(phi_h), sin(theta_h) * sin(phi_h), cos(theta_h)};
-          return normalize(wh);
         }
       }
-      // Refracted
-      float eta_i = wo.z > 0.0f ? n1 : n2;
-      float eta_t = wo.z > 0.0f ? n2 : n1;
-      Vec3f wh = normalize(wo + eta_i / eta_t * wi);
-      if (std::isnan(wh.x) || std::isnan(wh.y) || std::isnan(wh.z))
-      {
-        printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
-        printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
-        printf("eta_i: %f\n", eta_i);
-        printf("eta_t: %f\n", eta_t);
-        printf("wh: %f %f %f\n", wh.x, wh.y, wh.z);
-        throw std::runtime_error("wh is NaN");
+      else
+      { // Refracted
+        if (debug)
+          printf("compute a half vector for a refracted ray\n");
+        float eta_i = wo.z > 0.0f ? n1 : n2;
+        float eta_t = wo.z > 0.0f ? n2 : n1;
+        wh = -normalize(wo * eta_t +  eta_i * wi);
+        if (std::isnan(wh.x) || std::isnan(wh.y) || std::isnan(wh.z))
+        {
+          printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
+          printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
+          printf("eta_i: %f\n", eta_i);
+          printf("eta_t: %f\n", eta_t);
+          printf("wh: %f %f %f\n", wh.x, wh.y, wh.z);
+          throw std::runtime_error("wh is NaN");
+        }
+        if (debug)
+        {
+          printf("(compute)wo: %f %f %f\n", wo.x, wo.y, wo.z);
+          printf("(compute)wi: %f %f %f\n", wi.x, wi.y, wi.z);
+          printf("(compute)wh: %f %f %f\n", wh.x, wh.y, wh.z);
+          // if (!is_valid_refraction(wo, wi, wh, eta_i, eta_t))
+          // {
+          //   throw std::runtime_error("wh is invalid");
+          // }
+        }
       }
-      wh = wh.z < 0 ? -wh : wh;
       return wh;
     }
 
     Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal, bool debug = 0) const
     {
+      // return Vec3f{1.0f};
+      // New method
       Vec3f wo = to_local(wo_world, normal);
       Vec3f wi = to_local(wi_world, normal);
-      // Judge if the ray is reflected or refracted
-      // If the ray is reflected, they should be in the same hemisphere
-      // If the ray is refracted, they should be in different hemisphere
-      bool is_reflected = wo.z * wi.z > 0.0f;
-      Vec3f wh = wo + wi;
-      if (!is_reflected)
+      if (wi.x > 1.01f || wi.y > 1.01f || wi.z > 1.01f)
       {
-        float eta_i = wo.z > 0.0f ? n1 : n2;
-        float eta_t = wo.z > 0.0f ? n2 : n1;
-        wh = -normalize(wo + eta_i / eta_t * wi);
+        printf("wi_world: %f %f %f\n", wi_world.x, wi_world.y, wi_world.z);
+        printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
+        throw std::runtime_error("wi is invalid");
       }
-      // Handle the degenerate case
-      if (wh.x == 0 && wh.y == 0 && wh.z == 0)
-      {
-        // In this case, wo and wi are parallel, so assign wh to the perpendicular vector
-        if (wo.x != 0 || wo.y != 0)
-        {
-          wh = Vec3f{-wo.y, wo.x, 0};
-        }
-        else
-        {
-          wh = Vec3f{0, -wo.z, wo.y};
-        }
-        wh = normalize(wh);
-      }
-      // Debug
-      if (debug)
-      {
-        // check wo, wi, wh
-        check(wo, "wo");
-        check(wi, "wi");
-        if (check(wh, "wh"))
-          printf("wo, wi, wh: %f %f %f, %f %f %f, %f %f %f\n", wo.x, wo.y, wo.z, wi.x, wi.y, wi.z, wh.x, wh.y, wh.z);
-      }
-      float F = this->F(wo);
-      float D = this->D(wh, debug);
+      Vec3f wh = computeHalfVector(wo, wi, debug);
+      float F = this->F(wi);
+      float D = this->D(wh);
       float G = this->G(wo, wi);
-      // float cos_theta_o = std::abs(wo.z);
-      // float cos_theta_i = std::abs(wi.z);
-      float cos_theta_o = wo.z;
-      float cos_theta_i = wi.z;
-      float fr = F * D * G / std::abs(4.0f * cos_theta_o * cos_theta_i);
-      bool entering = wo.z > 0.0f;
-      float eta_i = entering ? n1 : n2;
-      float eta_t = entering ? n2 : n1;
+      float fr = F * D * G / (4.0f * std::abs(dot(wi_world, normal) * dot(wo_world, normal)));
+      float eta_i = wo.z > 0.0f ? n1 : n2;
+      float eta_t = wo.z > 0.0f ? n2 : n1;
       float eta = eta_i / eta_t;
-      wh = computeHalfVector(wo, wi, debug);
+      F = this->F(wi);
       // Debug
-      // float ft = eta_t * eta_t * (1.0f - F) * D * G / (float)pow(eta_i * dot(wo, wh) + eta_t * dot(wi, wh), 2.0f);
-      float ft = this->D(wh) * G * (1.0f - F) / (float)pow(dot(wo, wh) + eta * dot(wi, wh), 2.0f) * dot(wi, wh) * dot(wo, wh) / (cos_theta_o * cos_theta_i);
-      ft = std::abs(ft);
-      // fr = std::min(1.0f, fr);
-      // ft = std::min(1.0f, ft);
-      // fr = std::max(0.0f, fr);
-      // ft = std::max(0.0f, ft);
-
-      if (debug)
+      D = this->D(wh);
+      G = this->G(wo, wi);
+      // Modify: change dot(wi, normal) to dot(wi_world, normal) since wi is in local space
+      float term1 = dot(wi, wh) * dot(wo, wh) / (dot(wi_world, normal) * dot(wo_world, normal));
+      term1 = std::abs(term1);
+      // Modify: term2 is used to normalize the result but wo and wi are already normalized, so term2 is not needed
+      float term2 = (float)pow(dot(wh, wo) + eta * dot(wh, wi), 2);
+      float ft = term1 * eta * eta * (1.0f - F) * D * G / term2;
+      float res = ft;
+      if (debug && ft < 0.01f)
       {
-        printf("fr, ft: %f %f\n", fr, ft);
-        // Check ft recursively
-        if (ft == 0)
-        {
-          printf("ft is 0\n");
-          // Check D, G, F
-          check(this->D(wh), "D");
-          check(G, "G");
-          check(1.0 - F, "1 - F");
-          float term1 = pow(dot(wo, wh) + eta * dot(wi, wh), 2.0f);
-          float term2 = std::abs(dot(wi, wh)) * dot(wo, wh);
-          float term3 = cos_theta_o * cos_theta_i;
-          check(term1, "term1");
-          check(term2, "term2");
-          check(term3, "term3");
-          printf("ft = D * G * (1 - F) / term1 * term2 / term3\n");
-          printf("term1, term2, term3: %f %f %f\n", term1, term2, term3);
-          printf("D, G, 1 - F: %f %f %f\n", this->D(wh), G, 1.0 - F);
-        }
+        // inspect each term
+        // printf("normal: %f %f %f\n", normal.x, normal.y, normal.z);
+        // printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
+        // printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
+        // printf("wh: %f %f %f\n", wh.x, wh.y, wh.z);
+        // printf("term1: %f\n", term1);
+        // printf("dot(wi, wh): %f\n", dot(wi, wh));
+        // printf("dot(wo, wh): %f\n", dot(wo, wh));
+        // printf("dot(wi_world, normal): %f\n", dot(wi_world, normal));
+        // printf("dot(wo_world, normal): %f\n", dot(wo_world, normal));
+        // printf("eta: %f\n", eta);
+        // printf("wo + eta * wi: %f %f %f\n", wo.x + eta * wi.x, wo.y + eta * wi.y, wo.z + eta * wi.z);
+        // printf("term2: %f\n", term2);
+        // printf("(1 - F) * D * G: %f\n", (1.0f - F) * D * G);
+        // printf("F: %f\n", F);
+        // check(F, "F");
+        // check(D, "D");
+        // if (check(G, "G"))
+        //   this->G(wo, wi, true);
+        // printf("res: %f\n", res);
+        // throw std::runtime_error("res is invalid");
       }
+      // if (debug)
+      // {
+      //   printf("fr: %f\n", fr);
+      //   printf("ft: %f\n", ft);
+      // }
       return (fr + ft) * Vec3f{1.0f, 1.0f, 1.0f};
+
+      // Vec3f wo = to_local(wo_world, normal);
+      // Vec3f wi = to_local(wi_world, normal);
+      // // Judge if the ray is reflected or refracted
+      // // If the ray is reflected, they should be in the same hemisphere
+      // // If the ray is refracted, they should be in different hemisphere
+      // bool is_reflected = wo.z * wi.z > 0.0f;
+      // Vec3f wh = wo + wi;
+      // if (!is_reflected)
+      // {
+      //   float eta_i = wo.z > 0.0f ? n1 : n2;
+      //   float eta_t = wo.z > 0.0f ? n2 : n1;
+      //   wh = -normalize(wo + eta_i / eta_t * wi);
+      // }
+      // // Handle the degenerate case
+      // if (wh.x == 0 && wh.y == 0 && wh.z == 0)
+      // {
+      //   // In this case, wo and wi are parallel, so assign wh to the perpendicular vector
+      //   if (wo.x != 0 || wo.y != 0)
+      //   {
+      //     wh = Vec3f{-wo.y, wo.x, 0};
+      //   }
+      //   else
+      //   {
+      //     wh = Vec3f{0, -wo.z, wo.y};
+      //   }
+      //   wh = normalize(wh);
+      // }
+      // // Debug
+      // if (debug)
+      // {
+      //   // check wo, wi, wh
+      //   check(wo, "wo");
+      //   check(wi, "wi");
+      //   if (check(wh, "wh"))
+      //     printf("wo, wi, wh: %f %f %f, %f %f %f, %f %f %f\n", wo.x, wo.y, wo.z, wi.x, wi.y, wi.z, wh.x, wh.y, wh.z);
+      // }
+      // float F = this->F(wo);
+      // float D = this->D(wh, debug);
+      // float G = this->G(wo, wi);
+      // // float cos_theta_o = std::abs(wo.z);
+      // // float cos_theta_i = std::abs(wi.z);
+      // float cos_theta_o = wo.z;
+      // float cos_theta_i = wi.z;
+      // float fr = F * D * G / std::abs(4.0f * cos_theta_o * cos_theta_i);
+      // bool entering = wo.z > 0.0f;
+      // float eta_i = entering ? n1 : n2;
+      // float eta_t = entering ? n2 : n1;
+      // float eta = eta_i / eta_t;
+      // wh = computeHalfVector(wo, wi, debug);
+      // // Debug
+      // // float ft = eta_t * eta_t * (1.0f - F) * D * G / (float)pow(eta_i * dot(wo, wh) + eta_t * dot(wi, wh), 2.0f);
+      // float ft = this->D(wh) * G * (1.0f - F) / (float)pow(dot(wo, wh) + eta * dot(wi, wh), 2.0f) * dot(wi, wh) * dot(wo, wh) / (cos_theta_o * cos_theta_i);
+      // ft = std::abs(ft);
+
+      // if (debug)
+      // {
+      //   printf("fr, ft: %f %f\n", fr, ft);
+      //   // Check ft recursively
+      //   if (ft == 0)
+      //   {
+      //     printf("ft is 0\n");
+      //     // Check D, G, F
+      //     check(this->D(wh), "D");
+      //     check(G, "G");
+      //     check(1.0 - F, "1 - F");
+      //     float term1 = pow(dot(wo, wh) + eta * dot(wi, wh), 2.0f);
+      //     float term2 = std::abs(dot(wi, wh)) * dot(wo, wh);
+      //     float term3 = cos_theta_o * cos_theta_i;
+      //     check(term1, "term1");
+      //     check(term2, "term2");
+      //     check(term3, "term3");
+      //     printf("ft = D * G * (1 - F) / term1 * term2 / term3\n");
+      //     printf("term1, term2, term3: %f %f %f\n", term1, term2, term3);
+      //     printf("D, G, 1 - F: %f %f %f\n", this->D(wh), G, 1.0 - F);
+      //   }
+      // }
+      // return (fr + ft) * Vec3f{1.0f, 1.0f, 1.0f};
     }
     float pdf(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const
     {
@@ -502,10 +636,14 @@ namespace muni
      */
     bool Refract(const Vec3f &wi, const Vec3f &n, float eta, Vec3f &wt, bool debug = false) const
     {
+      if (check(wi, "wi"))
+      {
+        throw std::runtime_error("in refract function: wi is invalid");
+      }
       float cosThetaI = wi.z;
       float sin2ThetaI = std::max(0.0f, 1.0f - cosThetaI * cosThetaI);
       float sin2ThetaT = eta * eta * sin2ThetaI;
-      if (debug && sin2ThetaT >= 1)
+      if (sin2ThetaT >= 1)
       {
         printf("cosThetaI: %f\n", cosThetaI);
         printf("sin2ThetaI: %f\n", sin2ThetaI);
@@ -515,6 +653,16 @@ namespace muni
       }
       float cosThetaT = std::sqrt(1 - sin2ThetaT);
       wt = eta * -wi + (eta * cosThetaI - cosThetaT) * n;
+      if (check(wt, "wt"))
+      {
+        printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
+        printf("eta: %f\n", eta);
+        printf("cosThetaI: %f\n", cosThetaI);
+        printf("cosThetaT: %f\n", cosThetaT);
+        printf("n: %f %f %f\n", n.x, n.y, n.z);
+        throw std::runtime_error("in refract function: wt is invalid");
+      }
+      wt = normalize(wt);
       return true;
     }
 
@@ -533,19 +681,39 @@ namespace muni
       // wi = from_local(wi, normal);
       // return std::make_tuple(wi, 1.0f / (2 * M_PI));
       // Debug: sample a microfacet normal
-      float u1 = u.x, u2 = u.y;
-      float phi_h = 2.0f * M_PI * u1;
-      float theta_h = atan(sqrt(-roughness * roughness * log(1.0f - u2)));
-      Vec3f wh = Vec3f{sin(theta_h) * cos(phi_h), sin(theta_h) * sin(phi_h), cos(theta_h)};
+      // float u1 = u.x, u2 = u.y;
+      // float phi_h = 2.0f * M_PI * u1;
+      // float theta_h = atan(sqrt(-roughness * roughness * log(1.0f - u2)));
+      // Vec3f wh = Vec3f{sin(theta_h) * cos(phi_h), sin(theta_h) * sin(phi_h), cos(theta_h)};
+      float logSample = std::log(1 - u.x);
+      if (std::isinf(logSample))
+        logSample = 0;
+      float tan2Theta = -roughness * roughness * logSample;
+      float phi = u.y * 2.0f * M_PI;
+      float cos_theta_h = 1.0f / sqrt(1.0f + tan2Theta);
+      float sin_theta_h = (float)sqrt(std::max(0.0f, 1.0f - cos_theta_h * cos_theta_h));
+      float p_theta_h = 2.0f * sin_theta_h * exp(-tan2Theta / (roughness * roughness)) / (roughness * roughness * pow(cos_theta_h, 3));
       Vec3f wo = to_local(wo_world, normal);
+      Vec3f wh = Vec3f{sin_theta_h * cos(phi), sin_theta_h * sin(phi), cos_theta_h};
+      if (wh.z * wo.z < 0.0f)
+      {
+        wh = -wh;
+      }
+
+      wo = to_local(wo, wh);
+      float p_wi = p_theta_h / (4.0f * std::abs(dot(wo, wh)));
+
       float Fresnel = F(wo);
       float tmp = UniformSampler::next1d();
       if (tmp <= Fresnel)
       {
         // Reflect
-        Vec3f wi = Vec3f{-wo.x, -wo.y, wo.z};
-        float p_wi = Fresnel;
-        return {from_local(wi, normal), p_wi};
+        Vec3f wi = mirror_reflect(-wo, wh);
+        wi = from_local(wi, wh);
+        wi = from_local(wi, normal);
+        if (check_vec_invalid(wi, "wi"))
+          throw std::runtime_error("(reflect) wi is invalid");
+        return {wi, p_wi};
       }
       else
       {
@@ -554,7 +722,8 @@ namespace muni
         float eta_i = entering ? n1 : n2;
         float eta_t = entering ? n2 : n1;
         Vec3f wi;
-        if (!Refract(wo, Faceforward(normal, wo), eta_i / eta_t, wi))
+        check_vec_invalid(wi, "wi");
+        if (!Refract(wo, Faceforward(wh, wo), eta_i / eta_t, wi))
         {
           printf("tmp: %f\n", tmp);
           printf("Fresnel: %f\n", Fresnel);
@@ -571,8 +740,13 @@ namespace muni
           printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
           printf("normal: %f %f %f\n", normal.x, normal.y, normal.z);
         }
-        float p_wi = 1.0f - Fresnel;
-        return {from_local(wi, normal), p_wi};
+        check_vec_invalid(wi, "wi");
+        wi = from_local(wi, wh);
+        check_vec_invalid(wi, "wi");
+        wi = from_local(wi, normal);
+        if (check_vec_invalid(wi, "wi"))
+          throw std::runtime_error("(refract) wi is invalid");
+        return {wi, p_wi};
       }
     }
   };
