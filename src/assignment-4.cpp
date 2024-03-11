@@ -233,9 +233,9 @@ int main(int argc, char **argv)
     bool debug = 0;
     if (debug)
     {
-        test_compute_half_vector();
-        test_bsdf_sample(camera);
-        test_geometry();
+        // test_compute_half_vector();
+        // test_bsdf_sample(camera);
+        // test_geometry();
         test_sphere(camera);
         // Shoot a ray to the center of the image and print the hit triangle position
         // const float u = 0.5f;
@@ -515,33 +515,18 @@ void test_sphere(Camera camera)
     const Vec3f hit_position = camera.position + t_min * ray_direction;
     const Vec3f wo = -ray_direction;
     Dielectric_BSDF glass = std::get<Dielectric_BSDF>(BoxScene::materials[nearest_tri.material_id]);
-    // Sample the wi
-    auto [wi, pdf] = glass.sample(wo, nearest_tri.face_normal, UniformSampler::next2d());
-    printf("wo_world: %f, %f, %f\n", wo.x, wo.y, wo.z);
-    printf("wi_world: %f, %f, %f\n", wi.x, wi.y, wi.z);
-    printf("pdf: %f\n", pdf);
-
-    // Print the wo and wi in the local space
-    Vec3f wo_local = to_local(wo, nearest_tri.face_normal);
-    Vec3f wi_local = to_local(wi, nearest_tri.face_normal);
-    printf("wo_local: %f, %f, %f\n", wo_local.x, wo_local.y, wo_local.z);
-    printf("wi_local: %f, %f, %f\n", wi_local.x, wi_local.y, wi_local.z);
-
-    // Print the half vector in the local space
-    Vec3f half_vector = glass.computeHalfVector(wo_local, wi_local, true);
-    printf("half_vector(local): %f, %f, %f\n", half_vector.x, half_vector.y, half_vector.z);
-
-    // Print the half vector in the world space
-    Vec3f half_vector_world = from_local(half_vector, nearest_tri.face_normal);
-    printf("half_vector(world): %f, %f, %f\n", half_vector_world.x, half_vector_world.y, half_vector_world.z);
-
-    // Print the D value for the local half vector
-    printf("D(half vector): %f\n", glass.D(half_vector));
-
-    // Print tri normal
-    printf("tri_normal: %f, %f, %f\n", nearest_tri.face_normal.x, nearest_tri.face_normal.y, nearest_tri.face_normal.z);
-
-    // Evaluate the f_r
-    Vec3f f_r = glass.eval(wo, wi, nearest_tri.face_normal, true);
-    printf("f_s: %f, %f, %f\n", f_r.x, f_r.y, f_r.z);
+    // Sample the wi and cound how many reflected rays are there
+    int reflected_rays = 0;
+    for (int i = 0; i < 1000; i++)
+    {
+        Vec3f wi;
+        float pdf;
+        std::tie(wi, pdf) = glass.sample(wo, nearest_tri.face_normal, UniformSampler::next2d());
+        // if wi and wo are in the same hemisphere, it's a reflected ray
+        if (dot(wi, nearest_tri.face_normal) * dot(wo, nearest_tri.face_normal) > 0.0f)
+        {
+            reflected_rays++;
+        }
+    }
+    spdlog::info("The number of reflected rays: {}", reflected_rays);
 }
