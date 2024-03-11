@@ -266,12 +266,6 @@ namespace muni
       {
         return 0;
       }
-      // bool entering = cos_theta > 0.0f;
-      // float eta_i = n1, eta_t = n2;
-      // if (!entering)
-      // {
-      //   std::swap(eta_i, eta_t);
-      // }
       float eta_i = wi.z > 0.0f ? n1 : n2;
       float eta_t = wi.z > 0.0f ? n2 : n1;
       float sin_theta = sqrt(std::max(0.0f, 1.0f - cos_theta * cos_theta));
@@ -299,27 +293,8 @@ namespace muni
     float D(Vec3f h, bool debug = false) const
     {
       float theta_h = acos(h.z);
-      float tan_theta_h = tan(theta_h);
-      float cos_theta = cos(theta_h);
-      float cos_theta_4 = cos_theta * cos_theta * cos_theta * cos_theta;
-      float res = exp(-tan_theta_h * tan_theta_h / (roughness * roughness)) / (M_PI * roughness * roughness * cos_theta_4);
-      // Debug
-      // See if res is a wierd number
-      if (debug)
-      {
-        // Figure out which term causes the problem
-        float term1 = exp(-tan_theta_h * tan_theta_h / (roughness * roughness));
-        float term2 = 1.0f / (M_PI * roughness * roughness * pow(cos_theta, 4.0f));
-        // Check h.z, theta_h, tan_theta_h, cos_theta, term1, term2
-        check(h.z, "h.z");
-        check(theta_h, "theta_h");
-        check(tan_theta_h, "tan_theta_h");
-        check(cos_theta, "cos_theta");
-        check(term1, "term1");
-        check(term2, "term2");
-        check(res, "res");
-      }
-      return res;
+      float ans_D = exp(-tan(theta_h) * tan(theta_h) / (roughness * roughness)) / (M_PI * roughness * roughness * pow(cos(theta_h), 4.0f));
+      return ans_D;
     }
     float lambda(Vec3f w, bool debug) const
     {
@@ -373,21 +348,17 @@ namespace muni
     }
     Vec3f computeHalfVector(Vec3f wo, Vec3f wi, bool debug = false) const
     {
-      if (debug)
-      {
-        printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
-        printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
-      }
       Vec3f wh;
       if (wi.z * wo.z >= 0.0f)
       {
         if (debug)
           printf("compute a half vector for a reflected ray\n");
         // Reflected
-         wh = wo + wi;
+        wh = wo + wi;
         if (wh.x != 0 || wh.y != 0 || wh.z != 0)
         {
-          if (debug) printf("wh is not 0\n");
+          if (debug)
+            printf("wh is not 0\n");
           wh = normalize(wh);
         }
         else
@@ -398,7 +369,8 @@ namespace muni
           float theta_i = acos(wi.z);
           if (theta_i + theta_o - M_PI < 0.001f)
           {
-            if (debug) printf("wo, wi are parallel\n");
+            if (debug)
+              printf("wo, wi are parallel\n");
             wh = Vec3f{0.0f, 0.0f, 1.0f};
             return wh;
           }
@@ -424,7 +396,7 @@ namespace muni
           printf("compute a half vector for a refracted ray\n");
         float eta_i = wo.z > 0.0f ? n1 : n2;
         float eta_t = wo.z > 0.0f ? n2 : n1;
-        wh = -normalize(wo * eta_t +  eta_i * wi);
+        wh = -normalize(wo * eta_t + eta_i * wi);
         if (std::isnan(wh.x) || std::isnan(wh.y) || std::isnan(wh.z))
         {
           printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
@@ -450,7 +422,6 @@ namespace muni
 
     Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal, bool debug = 0) const
     {
-      // return Vec3f{1.0f};
       // New method
       Vec3f wo = to_local(wo_world, normal);
       Vec3f wi = to_local(wi_world, normal);
@@ -460,27 +431,27 @@ namespace muni
         printf("wi: %f %f %f\n", wi.x, wi.y, wi.z);
         throw std::runtime_error("wi is invalid");
       }
-      Vec3f wh = computeHalfVector(wo, wi, debug);
-      float F = this->F(wi);
+      Vec3f wh = computeHalfVector(wo, wi);
+      float F = this->F(to_local(wo, wh));
       float D = this->D(wh);
       float G = this->G(wo, wi);
-      float fr = F * D * G / (4.0f * std::abs(dot(wi_world, normal) * dot(wo_world, normal)));
+      float fr = F * D * G / (4.0f * std::abs(wi.z * wo.z));
       float eta_i = wo.z > 0.0f ? n1 : n2;
       float eta_t = wo.z > 0.0f ? n2 : n1;
       float eta = eta_i / eta_t;
-      F = this->F(wi);
-      // Debug
-      D = this->D(wh);
-      G = this->G(wo, wi);
       // Modify: change dot(wi, normal) to dot(wi_world, normal) since wi is in local space
       float term1 = dot(wi, wh) * dot(wo, wh) / (dot(wi_world, normal) * dot(wo_world, normal));
       term1 = std::abs(term1);
       // Modify: term2 is used to normalize the result but wo and wi are already normalized, so term2 is not needed
       float term2 = (float)pow(dot(wh, wo) + eta * dot(wh, wi), 2);
       float ft = term1 * eta * eta * (1.0f - F) * D * G / term2;
+      ft = 1.0f;
       float res = ft;
-      if (debug && ft < 0.01f)
+      if (debug && fr < 0.01f)
       {
+        printf("F, D, G: %f %f %f\n", F, D, G);
+        printf("dot(wh, normal): %f\n", wh.z);
+        printf("fr: %f\n", fr);
         // inspect each term
         // printf("normal: %f %f %f\n", normal.x, normal.y, normal.z);
         // printf("wo: %f %f %f\n", wo.x, wo.y, wo.z);
